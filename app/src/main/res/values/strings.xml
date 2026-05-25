@@ -264,6 +264,7 @@
     <string name="theme_light">Light</string>
     <string name="theme_oled">OLED Black</string>
     <string name="theme_ocean">Ocean</string>
+    <string name="theme_fsociety">fsociety</string>
     <string name="theme_dynamic">Dynamic</string>
 
     <!-- Settings descriptions -->

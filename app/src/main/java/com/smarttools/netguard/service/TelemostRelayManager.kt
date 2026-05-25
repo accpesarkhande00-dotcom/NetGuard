@@ -1,0 +1,267 @@
+package com.smarttools.netguard.service
+
+import android.util.Log
+import com.smarttools.netguard.model.ServerProfile
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONObject
+import java.io.BufferedWriter
+import java.io.File
+import java.io.OutputStreamWriter
+import java.net.Inet4Address
+import java.net.InetAddress
+import java.net.InetSocketAddress
+
+/**
+ * Owns one or more librelay.so subprocesses and a local SOCKS5 round-robin
+ * load balancer that fans out new connections across them.
+ *
+ * Single-link profile.address = one Telemost URL; one child relay.
+ * Multi-link profile.address = newline-separated URLs; N child relays + LB.
+ *
+ * In both cases tun2socks talks to a single "exposed" SOCKS5 port; the LB
+ * is the demultiplexer. New TCP connections round-robin across upstreams,
+ * so workloads with many concurrent connections (typical browsing) get
+ * aggregate bandwidth, while a single big stream is still capped at one
+ * Telemost room's per-stream limit.
+ */
+class TelemostRelayManager(
+    private val nativeLibDir: String,
+    private val onLog: (String) -> Unit,
+    private val onStatus: (String) -> Unit,
+    private val onTunnelLost: () -> Unit = {}
+) {
+    companion object {
+        private const val TAG = "TelemostRelay"
+        private const val SIGNALING_PORT_BASE = 9001
+        private const val INTERNAL_SOCKS_BASE = 38000
+    }
+
+    private val instances = mutableListOf<RelayInstance>()
+    private var lb: SocksRoundRobinLb? = null
+
+    /** First relay's process — used by the existing watchdog hook. */
+    fun process(): Process? = instances.firstOrNull()?.process
+
+    /**
+     * Start N relays (one per link parsed from [profile.address]) and bind the
+     * SOCKS5 LB on [exposedSocksPort]. All relays share the same SOCKS auth so
+     * the LB stays byte-transparent.
+     *
+     * Returns true once at least one relay reached TUNNEL_CONNECTED and the LB
+     * is listening. Single-link profiles return true the moment that one
+     * relay is up; multi-link profiles tolerate per-relay failures as long
+     * as one succeeds.
+     */
+    suspend fun start(
+        profile: ServerProfile,
+        exposedSocksPort: Int,
+        socksUser: String,
+        socksPass: String,
+        scope: CoroutineScope,
+        timeoutMs: Long = 30_000
+    ): Boolean {
+        stop()
+        val links = profile.address.split('\n', '\r')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+        if (links.isEmpty()) {
+            onLog("No Telemost links in profile address")
+            return false
+        }
+
+        // Spawn each relay on its own internal port. We attempt them serially to
+        // avoid hammering Yandex's signaling API in a burst; per-relay startup
+        // is ~2-5s so 3 in series is fine within our overall timeout budget.
+        var anySuccess = false
+        for ((i, link) in links.withIndex()) {
+            val internalPort = INTERNAL_SOCKS_BASE + i
+            val signalingPort = SIGNALING_PORT_BASE + i
+            val inst = RelayInstance(
+                idx = i,
+                joinLink = link,
+                nativeLibDir = nativeLibDir,
+                socksPort = internalPort,
+                signalingPort = signalingPort,
+                socksUser = socksUser,
+                socksPass = socksPass,
+                onLog = { line -> onLog("[#${i + 1}] $line") },
+                onStatus = onStatus,
+                onTunnelLost = onTunnelLost
+            )
+            val perRelayTimeout = (timeoutMs / links.size).coerceAtLeast(8_000L)
+            val ok = inst.start(scope, perRelayTimeout)
+            if (ok) {
+                instances.add(inst)
+                anySuccess = true
+            } else {
+                onLog("Relay #${i + 1} failed to connect; continuing without it")
+                inst.stop()
+            }
+        }
+
+        if (!anySuccess) {
+            onLog("All ${links.size} Telemost relays failed to connect")
+            return false
+        }
+
+        val upstreams = instances.map { InetSocketAddress("127.0.0.1", it.socksPort) }
+        val lb = SocksRoundRobinLb(exposedSocksPort, upstreams)
+        if (!lb.start(scope)) {
+            onLog("LB failed to bind on port $exposedSocksPort")
+            stop()
+            return false
+        }
+        this.lb = lb
+        onLog("Telemost multi-channel up: ${instances.size}/${links.size} relays, LB on :$exposedSocksPort")
+        return true
+    }
+
+    fun stop() {
+        try { lb?.stop() } catch (_: Exception) {}
+        lb = null
+        instances.forEach { it.stop() }
+        instances.clear()
+    }
+
+    /**
+     * Owns a single librelay.so subprocess + its stdin/stdout protocol. Public
+     * surface is intentionally small: start/stop and a process handle for the
+     * watchdog.
+     */
+    private class RelayInstance(
+        private val idx: Int,
+        private val joinLink: String,
+        private val nativeLibDir: String,
+        val socksPort: Int,
+        private val signalingPort: Int,
+        private val socksUser: String,
+        private val socksPass: String,
+        private val onLog: (String) -> Unit,
+        private val onStatus: (String) -> Unit,
+        private val onTunnelLost: () -> Unit
+    ) {
+        @Volatile var process: Process? = null
+        @Volatile private var stdinWriter: BufferedWriter? = null
+        @Volatile private var tunnelConnected = false
+        @Volatile private var sawReady = false
+
+        suspend fun start(scope: CoroutineScope, timeoutMs: Long): Boolean {
+            val bin = File(nativeLibDir, "librelay.so")
+            if (!bin.exists()) {
+                onLog("librelay.so not found at ${bin.absolutePath}")
+                return false
+            }
+            // No SOCKS5 auth on upstreams: the LB is byte-transparent and any
+            // auth attempt can be fragmented across pump reads, causing the
+            // upstream's NegotiateAuth to fail. All sockets are 127.0.0.1
+            // anyway, so auth would only add bug surface without security gain.
+            val pb = ProcessBuilder(
+                bin.absolutePath,
+                "--mode", "telemost-headless-joiner",
+                "--ws-port", signalingPort.toString(),
+                "--socks-port", socksPort.toString()
+            )
+            pb.redirectErrorStream(true)
+            val proc = try {
+                pb.start()
+            } catch (e: Exception) {
+                onLog("spawn failed: ${e.message}")
+                return false
+            }
+            process = proc
+            stdinWriter = BufferedWriter(OutputStreamWriter(proc.outputStream))
+            Log.i(TAG, "librelay.so #${idx + 1} started")
+
+            scope.launch(Dispatchers.IO) {
+                try {
+                    proc.inputStream.bufferedReader().forEachLine { handleLine(it) }
+                } catch (e: Exception) {
+                    Log.w(TAG, "#${idx + 1} stdout reader exited: ${e.message}")
+                }
+            }
+
+            val ok = withTimeoutOrNull(timeoutMs) {
+                while (!tunnelConnected) {
+                    if (process?.isAlive != true) return@withTimeoutOrNull false
+                    delay(150)
+                }
+                true
+            } ?: false
+            if (!ok) {
+                onLog("did not reach TUNNEL_CONNECTED in ${timeoutMs}ms")
+                stop()
+            }
+            return ok
+        }
+
+        private fun handleLine(line: String) {
+            when {
+                line.startsWith("STATUS:") -> {
+                    val status = line.removePrefix("STATUS:")
+                    onLog(status)
+                    onStatus(status)
+                    when {
+                        status == "READY" -> {
+                            if (!sawReady) { sawReady = true; sendJoin() }
+                        }
+                        status == "TUNNEL_CONNECTED" -> tunnelConnected = true
+                        status == "TUNNEL_LOST" -> {
+                            tunnelConnected = false
+                            try { onTunnelLost() } catch (_: Exception) {}
+                        }
+                    }
+                }
+                line.startsWith("RESOLVE:") -> {
+                    val host = line.removePrefix("RESOLVE:")
+                    Thread {
+                        val ip = try {
+                            val addrs = InetAddress.getAllByName(host)
+                            val a4 = addrs.firstOrNull { it is Inet4Address } ?: addrs.firstOrNull()
+                            a4?.hostAddress.orEmpty()
+                        } catch (_: Exception) { "" }
+                        writeStdin(ip)
+                    }.start()
+                }
+                else -> onLog(line)
+            }
+        }
+
+        private fun sendJoin() {
+            val json = JSONObject().apply {
+                put("joinLink", joinLink)
+                put("displayName", "NetGuard")
+                put("tunnelMode", "video")
+            }.toString()
+            writeStdin("JOIN:$json")
+        }
+
+        private fun writeStdin(s: String) {
+            val w = stdinWriter ?: return
+            try {
+                synchronized(w) {
+                    w.write(s)
+                    w.newLine()
+                    w.flush()
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "#${idx + 1} stdin write failed: ${e.message}")
+            }
+        }
+
+        fun stop() {
+            try { stdinWriter?.close() } catch (_: Exception) {}
+            stdinWriter = null
+            process?.let { p ->
+                try { p.destroy() } catch (_: Exception) {}
+                try { p.destroyForcibly() } catch (_: Exception) {}
+            }
+            process = null
+            tunnelConnected = false
+            sawReady = false
+        }
+    }
+}

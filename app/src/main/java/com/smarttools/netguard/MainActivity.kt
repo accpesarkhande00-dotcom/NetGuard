@@ -66,6 +66,7 @@ class MainActivity : AppCompatActivity() {
             ThemeMode.LIGHT -> R.style.Theme_NetGuard_Light
             ThemeMode.OLED -> R.style.Theme_NetGuard_OLED
             ThemeMode.OCEAN -> R.style.Theme_NetGuard_Ocean
+            ThemeMode.FSOCIETY -> R.style.Theme_NetGuard_Fsociety
             ThemeMode.DYNAMIC -> R.style.Theme_NetGuard_Dynamic
         })
         // Apply DynamicColors AFTER setTheme() — otherwise setTheme() overwrites the overlay
@@ -83,6 +84,13 @@ class MainActivity : AppCompatActivity() {
 
         val bottomNav = findViewById<BottomNavigationView>(R.id.bottom_nav)
         bottomNav.setupWithNavController(navController)
+
+        // fsociety boot-sequence: only on cold start (no savedInstanceState) so
+        // it doesn't replay on every rotation / process restore. Lines type in
+        // one by one for ~1.8s, then fade out.
+        if (theme == ThemeMode.FSOCIETY && savedInstanceState == null) {
+            playFsocietyBootSequence()
+        }
         // Custom click handler: when a tab is tapped, pop everything off the
         // backstack until we're at the root of THAT tab. Default behavior
         // can leave sub-screens (like nav_trigger under nav_settings) on the
@@ -130,6 +138,36 @@ class MainActivity : AppCompatActivity() {
                 navController.navigate(R.id.action_settings_to_trigger)
             } catch (_: Exception) { /* graph mismatch — ignore */ }
         }
+    }
+
+    private fun playFsocietyBootSequence() {
+        val overlay = findViewById<android.widget.TextView>(R.id.boot_overlay) ?: return
+        overlay.visibility = android.view.View.VISIBLE
+        overlay.alpha = 1f
+        val lines = listOf(
+            "[    0.000] booting fsociety v1.2.2",
+            "[    0.142] init tunnel pool...     OK",
+            "[    0.298] decrypting profiles...  OK",
+            "[    0.521] kill switch armed...    OK",
+            "[    0.842] hello, friend."
+        )
+        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+        val sb = StringBuilder()
+        // Type lines in over ~1.4s total (5 lines × 280ms cadence).
+        for ((i, line) in lines.withIndex()) {
+            handler.postDelayed({
+                sb.appendLine(line)
+                overlay.text = sb.toString()
+            }, i * 280L)
+        }
+        // Hold the final frame briefly, then fade out.
+        handler.postDelayed({
+            overlay.animate()
+                .alpha(0f)
+                .setDuration(400)
+                .withEndAction { overlay.visibility = android.view.View.GONE }
+                .start()
+        }, 1800L)
     }
 
     override fun onNewIntent(intent: Intent) {

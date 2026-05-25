@@ -43,6 +43,23 @@ object ServerPreflight {
             val address = profile.address
             if (address.isEmpty()) return@withContext Result.Dead("Empty address")
 
+            // Telemost profile.address holds the full join URL, not a hostname.
+            // Probe the SFU entry point instead; the actual relay handshake
+            // happens later inside librelay.so.
+            if (profile.protocol == com.smarttools.netguard.model.Protocol.TELEMOST) {
+                val socket = Socket()
+                val started = System.currentTimeMillis()
+                return@withContext try {
+                    socket.connect(InetSocketAddress("telemost.yandex.ru", 443), TCP_TIMEOUT_MS)
+                    val rtt = System.currentTimeMillis() - started
+                    if (rtt > slowThresholdMs) Result.Slow(rtt) else Result.Ok(rtt)
+                } catch (e: Exception) {
+                    Result.Dead("Telemost TCP: ${e.message ?: e.javaClass.simpleName}")
+                } finally {
+                    try { socket.close() } catch (_: Exception) {}
+                }
+            }
+
             // DNS first — covers both transports and rejects garbage hostnames
             // before we burn the TCP budget on a name that does not resolve.
             val resolved = try {

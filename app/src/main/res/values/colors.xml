@@ -32,4 +32,16 @@
     <color name="btn_disconnected">#616161</color>
 
     <color name="ic_launcher_background">#0D1B2A</color>
+
+    <!-- fsociety theme: phosphor terminal green + alert red on pure black -->
+    <color name="fsoc_bg">#000000</color>
+    <color name="fsoc_surface">#0A0A0A</color>
+    <color name="fsoc_surface_variant">#141414</color>
+    <color name="fsoc_green">#FF00FF41</color>
+    <color name="fsoc_green_dim">#FF00B33A</color>
+    <color name="fsoc_red">#FFFF073A</color>
+    <color name="fsoc_amber">#FFFFB000</color>
+    <color name="fsoc_outline">#FF1F3A22</color>
+    <color name="fsoc_text">#FF00FF41</color>
+    <color name="fsoc_text_secondary">#FF6B8C72</color>
 </resources>

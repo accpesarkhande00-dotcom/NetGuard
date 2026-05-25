@@ -60,6 +60,7 @@ enum class ThemeMode {
     LIGHT,
     OLED,
     OCEAN,
+    FSOCIETY,
     DYNAMIC
 }
 

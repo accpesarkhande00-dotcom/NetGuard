@@ -51,7 +51,7 @@ Package name `com.smarttools.netguard`, notification says "Connection active / N
 
 ## Features
 
-**Protocols:** VLESS (+ REALITY), VMess, Trojan, Shadowsocks, Hysteria2
+**Protocols:** VLESS (+ REALITY), VMess, Trojan, Shadowsocks, Hysteria2, Telemost (loopback SOCKS5 LB over multi-channel relay)
 
 **Transports:** TCP, WebSocket, gRPC, HTTP/2, HTTP Upgrade, SplitHTTP, KCP, QUIC
 
@@ -73,7 +73,7 @@ Package name `com.smarttools.netguard`, notification says "Connection active / N
 | DNS | Custom primary/secondary, optional DoH through proxy |
 | Routing modes | Global proxy / Rule-based (RU direct) / Direct |
 | LAN bypass | Access local network devices while connected |
-| Themes | Dark, Light, OLED Black, Ocean, Dynamic (Material You) |
+| Themes | Dark, Light, OLED Black, Ocean, **fsociety** (Mr. Robot phosphor terminal), Dynamic (Material You) |
 | Languages | 16 languages |
 | Backup/Restore | Export/import full config as JSON |
 | Log viewer | Real-time xray logs with auto-redaction of credentials |
@@ -141,6 +141,77 @@ NetGuard does **not** reuse code from these projects directly (NetGuard is Apach
 If we missed your project here, please open an issue - credit is the one thing we can give back, and we want the list to be complete.
 
 ## Release notes
+
+### v1.3.0 (2026-05-26) — fsociety theme + Telemost multi-channel tunnel
+
+**fsociety theme.** Mr. Robot inspired phosphor-terminal redesign (Settings →
+Theme → fsociety). Pure-black background, classic Apple-IIe / VT100 green
+text, red destructive accent, monospace typography across the whole app.
+Other themes (Dark / Light / OLED / Ocean / Dynamic) are untouched and the
+redesign is opt-in.
+
+What changes when the theme is active:
+
+- One-line VT100-style boot sequence on cold start of `MainActivity`
+  (5 lines typed in ~1.4s then faded out, plays once per process).
+- `tv_fsoc_header` shows the *hello, friend.* pilot opener above the
+  status line on the home screen.
+- Connection status text rewritten: `[ OFFLINE ]` / `[ DECRYPTING
+  TUNNEL... ]` / `[ ROOT // ALIVE ]` / `[ SEGFAULT ]`, with a blinking
+  cursor (transparent-color span trick so the line never jitters).
+- Profile list renders in `vlessctl ls` style — zero-padded `[NN]`
+  index counted over visible profile rows, name uppercased, address
+  and protocol on one row separated by `│`.
+- Settings section headers prefixed with `// SECTION_NAME` walker
+  applied recursively to bold wrap-content TextViews in the
+  fragment root.
+- Easter egg: tap the profile name 5 times within a 3-second window
+  to fade in a random Mr. Robot quote (23 quotes, translated to all
+  15 supported locales; English source line shown, native translation
+  shown beneath separated by `—`).
+
+**Telemost protocol.** New native `Protocol.TELEMOST` for relaying
+Yandex Telemost / Yandex SFU traffic that other obfuscation protocols
+can't carry well (per-stream UDP cap on the Yandex backend).
+
+How it works at the wire layer:
+
+- A profile pasted as a single `telemost://...` URI (or multiple URIs
+  in a subscription that gets auto-detected as single/multi) carries
+  the upstream Telemost relay credentials.
+- `TelemostRelayManager` spins up one or more loopback `librelay.so`
+  Go binaries (ARM64 static, ~11.7 MB, shipped in
+  `jniLibs/arm64-v8a/`) — one per relay-link in the profile.
+- `SocksRoundRobinLb` (Kotlin, byte-transparent) load-balances each
+  inbound TCP connect across the healthy local SOCKS5 instances with
+  a 15-second cooldown for upstreams that fail to handshake.
+- `XrayConfig` / `Ping` / `Preflight` skip the Telemost profile (no
+  xray inbound is generated for it). `TunnelVpnService` dispatches
+  TELEMOST through the LB watchdog, not the xray pipeline.
+- Loopback-only path doesn't carry SOCKS5 auth — the byte-transparent
+  LB used to fragment auth handshakes when round-robining the same
+  connection across instances. Without auth the relay is restricted
+  to `127.0.0.1` and isn't exposed to other apps on the device.
+
+Multi-channel x3 / x6 is what makes the protocol useful: a single
+profile spawning N parallel `librelay.so` workers means new TCP
+connects are balanced across N independent upstream channels,
+breaking past the per-stream Yandex SFU cap (~1.25 Mbps down /
+~23.5 Mbps up per channel in our measurements). Single-channel
+Telemost is still useful for reach; multi-channel is what gives
+usable bulk throughput.
+
+**Subscription parser.** `parseSubscription` no longer feeds plaintext
+URI lists through the base64 decoder — if the body already starts with
+`vless://` / `telemost://` / etc. we skip the decode step. Some
+providers and copy-paste flows hand us plain text that the base64
+decoder accepts as valid garbage, yielding empty profile lists.
+
+**Localization.** 585 new translation strings added across 15
+non-English locales (ar, de, es, fr, hi, in, it, ja, ko, pt, ru, th,
+tr, vi, zh-rCN) for theme labels, fsociety status strings, quote
+translations, and 11 previously-RU-only keys that needed parity.
+Every locale now reports 0 missing keys.
 
 ### v1.2.2 (2026-05-11) — handover rewrite + Hysteria2 fix
 

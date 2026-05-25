@@ -219,6 +219,7 @@ object XrayConfigGenerator {
             Protocol.TROJAN -> buildTrojanOutbound(profile, fingerprint)
             Protocol.SHADOWSOCKS -> buildShadowsocksOutbound(profile, fingerprint)
             Protocol.HYSTERIA2 -> buildHysteria2Outbound(profile, fingerprint)
+            Protocol.TELEMOST -> throw IllegalStateException("Telemost profile must not reach XrayConfigGenerator; use TelemostRelayManager")
         }
         // TLS Fragment: route proxy's TCP through the fragment outbound
         if (settings.tlsFragmentEnabled) {

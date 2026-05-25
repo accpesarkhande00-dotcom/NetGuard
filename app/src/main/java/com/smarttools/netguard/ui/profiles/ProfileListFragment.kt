@@ -45,6 +45,8 @@ class ProfileListFragment : Fragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
+        val fsocietyMode = (requireActivity().application as com.smarttools.netguard.App)
+            .loadSettings().themeMode == com.smarttools.netguard.model.ThemeMode.FSOCIETY
         adapter = ProfileAdapter(
             onItemClick = { profile ->
                 // Use MainViewModel — handles reconnect if VPN is active
@@ -58,7 +60,8 @@ class ProfileListFragment : Fragment() {
             },
             onFavoriteClick = { profile ->
                 viewModel.toggleFavorite(profile.id)
-            }
+            },
+            fsocietyMode = fsocietyMode
         )
 
         binding.rvProfiles.layoutManager = LinearLayoutManager(requireContext())

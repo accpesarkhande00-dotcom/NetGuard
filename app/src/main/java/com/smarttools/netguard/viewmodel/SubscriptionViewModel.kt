@@ -29,6 +29,28 @@ class SubscriptionViewModel(application: Application) : AndroidViewModel(applica
                 _message.emit("URL is empty")
                 return@launch
             }
+            // Shortcut: if the user pasted a single profile URI instead of a
+            // subscription URL (common with Telemost links since we don't host
+            // a subscription endpoint for them), save it directly as a single
+            // standalone profile and skip the periodic HTTP refresh entirely.
+            val asProfileUri = normalizeAsSingleProfileUri(trimmedUrl)
+            if (asProfileUri != null) {
+                val parsed = try {
+                    com.smarttools.netguard.core.ProfileParser.parseSingleUri(asProfileUri)
+                } catch (e: Exception) {
+                    _message.emit("Invalid profile URI: ${e.message}")
+                    return@launch
+                }
+                if (parsed == null) {
+                    _message.emit("Unsupported profile URI")
+                    return@launch
+                }
+                val finalName = name.trim().ifBlank { parsed.name.ifBlank { "Profile" } }
+                val profile = parsed.copy(name = finalName.take(MAX_SUB_NAME_LENGTH))
+                app.profileRepository.insert(profile)
+                _message.emit("Profile added: $finalName")
+                return@launch
+            }
             // Validate before insert — otherwise a junk subscription persists
             // and WorkManager keeps retrying it every 24h.
             try {
@@ -64,6 +86,33 @@ class SubscriptionViewModel(application: Application) : AndroidViewModel(applica
     private fun hostFromUrl(url: String): String? = try {
         java.net.URL(url).host?.takeIf { it.isNotBlank() }
     } catch (_: Exception) { null }
+
+    /**
+     * If [input] is a single-profile URI (e.g. `vless://...`, `telemost://...`),
+     * or a bare Telemost join link (`https://telemost.yandex.ru/j/<id>`), return
+     * the canonical URI representation. Otherwise null — caller should treat
+     * the input as a subscription HTTP URL.
+     */
+    private fun normalizeAsSingleProfileUri(input: String): String? {
+        val schemes = listOf("vless://", "vmess://", "trojan://", "ss://", "hysteria2://", "hy2://", "telemost://")
+        if (schemes.any { input.startsWith(it) }) return input
+
+        // Multi-line paste of bare Telemost links (one per line) → produce a
+        // single multi-channel profile. The relay manager spawns one
+        // librelay.so per link and round-robins TCP connections via SOCKS LB.
+        val lines = input.split('\n', '\r').map { it.trim() }.filter { it.isNotEmpty() }
+        val telemostLinks = lines.takeIf { it.isNotEmpty() && it.all { l -> l.startsWith("https://telemost.yandex.ru/j/") } }
+        if (telemostLinks != null) {
+            val joined = telemostLinks.joinToString("\n")
+            val encoded = android.util.Base64.encodeToString(
+                joined.toByteArray(Charsets.UTF_8),
+                android.util.Base64.NO_WRAP or android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING
+            )
+            val name = if (telemostLinks.size > 1) "Telemost-x${telemostLinks.size}" else "Telemost"
+            return "telemost://$encoded#$name"
+        }
+        return null
+    }
 
     private companion object {
         // Mirrors ProfileParser.MAX_NAME_LENGTH so a malicious paste with a

@@ -59,6 +59,7 @@ object PingHelper {
     suspend fun pingForProfile(host: String, port: Int, protocol: Protocol): Int {
         return when (protocol) {
             Protocol.HYSTERIA2 -> icmpPing(host)
+            Protocol.TELEMOST -> tcpPing("telemost.yandex.ru", 443)
             else -> tcpPing(host, port)
         }
     }

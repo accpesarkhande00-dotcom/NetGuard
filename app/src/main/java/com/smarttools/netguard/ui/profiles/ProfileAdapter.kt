@@ -32,7 +32,13 @@ class ProfileAdapter(
     private val onItemClick: (ServerProfile) -> Unit,
     private val onItemLongClick: (ServerProfile) -> Unit,
     private val onPingClick: (ServerProfile) -> Unit,
-    private val onFavoriteClick: (ServerProfile) -> Unit
+    private val onFavoriteClick: (ServerProfile) -> Unit,
+    /**
+     * fsociety theme prepends `[NN]` zero-padded indices to profile names and
+     * uppercases them so the list reads like `vlessctl ls`. False for every
+     * other theme — leaves the existing Material list look untouched.
+     */
+    private val fsocietyMode: Boolean = false
 ) : ListAdapter<ProfileAdapter.Item, RecyclerView.ViewHolder>(DIFF) {
 
     /**
@@ -133,7 +139,15 @@ class ProfileAdapter(
     override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
         when (val item = getItem(position)) {
             is Item.Header -> (holder as HeaderVH).bind(item.sub)
-            is Item.Profile -> (holder as ProfileVH).bind(item.profile)
+            is Item.Profile -> {
+                // Profile-only index for the [NN] tag in fsociety mode:
+                // count Profile items in currentList up to and including this
+                // position so subscription headers don't pollute the numbering.
+                val profileIdx = (0..position).count { idx ->
+                    getItem(idx) is Item.Profile
+                } - 1
+                (holder as ProfileVH).bind(item.profile, profileIdx)
+            }
         }
     }
 
@@ -223,13 +237,26 @@ class ProfileAdapter(
     inner class ProfileVH(val binding: ItemProfileBinding) :
         RecyclerView.ViewHolder(binding.root) {
 
-        fun bind(profile: ServerProfile) {
+        fun bind(profile: ServerProfile, profileIndex: Int = 0) {
             val b = binding
             val ctx = b.root.context
 
-            b.tvName.text = profile.name.ifEmpty { "${profile.address}:${profile.port}" }
-            b.tvAddress.text = "${profile.address}:${profile.port}"
+            val rawName = profile.name.ifEmpty { "${profile.address}:${profile.port}" }
+            b.tvName.text = if (fsocietyMode) {
+                val tag = String.format("[%02d]", profileIndex.coerceAtLeast(0))
+                "$tag ${rawName.uppercase()}"
+            } else {
+                rawName
+            }
+            b.tvAddress.text = if (fsocietyMode) {
+                "${profile.address}:${profile.port}  │  ${profile.protocol.value.uppercase()}"
+            } else {
+                "${profile.address}:${profile.port}"
+            }
             b.tvProtocol.text = profile.protocol.value.uppercase()
+            // Avoid double-printing the protocol when the address row already
+            // includes it in fsociety mode.
+            b.tvProtocol.visibility = if (fsocietyMode) View.GONE else View.VISIBLE
 
             when {
                 profile.lastPingMs < 0 -> {

@@ -35,7 +35,7 @@ import kotlinx.coroutines.launch
 class SettingsFragment : Fragment() {
 
     companion object {
-        private val THEME_MODES = arrayOf(ThemeMode.DARK, ThemeMode.LIGHT, ThemeMode.OLED, ThemeMode.OCEAN, ThemeMode.DYNAMIC)
+        private val THEME_MODES = arrayOf(ThemeMode.DARK, ThemeMode.LIGHT, ThemeMode.OLED, ThemeMode.OCEAN, ThemeMode.FSOCIETY, ThemeMode.DYNAMIC)
 
         private val LANGUAGE_CODES = arrayOf(
             "system", "en", "ru", "de", "zh-CN", "ja", "hi", "tr",
@@ -119,6 +119,15 @@ class SettingsFragment : Fragment() {
         setupBackupRestore()
         setupAbout()
 
+        // fsociety theme: rewrite "section header" TextViews into terminal
+        // comment-style `// HEADER`. Detected heuristically — bold + ~14sp +
+        // wrap_content width — so adding a new section never needs touching
+        // this loop. Skipped entirely on every other theme.
+        val app = requireActivity().application as com.smarttools.netguard.App
+        if (app.loadSettings().themeMode == ThemeMode.FSOCIETY) {
+            applyFsocietyHeaderStyle(binding.root as android.view.ViewGroup)
+        }
+
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 launch {
@@ -129,6 +138,7 @@ class SettingsFragment : Fragment() {
                             ThemeMode.LIGHT -> getString(R.string.theme_light)
                             ThemeMode.OLED -> getString(R.string.theme_oled)
                             ThemeMode.OCEAN -> getString(R.string.theme_ocean)
+                            ThemeMode.FSOCIETY -> getString(R.string.theme_fsociety)
                             ThemeMode.DYNAMIC -> getString(R.string.theme_dynamic)
                         }
                         binding.rgRouting.check(
@@ -200,13 +210,42 @@ class SettingsFragment : Fragment() {
         }
     }
 
+    /**
+     * Walk the settings layout and rewrite every "section header" TextView
+     * to `// HEADER` terminal style. A section header is identified as a
+     * TextView whose text is short (≤ ~24 chars), bold, ~14sp, and whose
+     * width is wrap_content (not a full-width button). The transform is
+     * additive — if a header already starts with `//` we skip it so this is
+     * idempotent across configuration changes.
+     */
+    private fun applyFsocietyHeaderStyle(root: android.view.ViewGroup) {
+        for (i in 0 until root.childCount) {
+            val child = root.getChildAt(i)
+            if (child is android.widget.TextView) {
+                val tf = child.typeface
+                val isBold = tf != null && tf.isBold
+                val sizeSp = child.textSize / resources.displayMetrics.scaledDensity
+                val isHeaderSize = sizeSp in 13f..15.5f
+                val isWrap = child.layoutParams?.width == android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+                val raw = child.text?.toString()?.trim().orEmpty()
+                if (isBold && isHeaderSize && isWrap && raw.isNotEmpty() &&
+                    raw.length <= 24 && !raw.startsWith("//")) {
+                    child.text = "// ${raw.uppercase()}"
+                }
+            } else if (child is android.view.ViewGroup) {
+                applyFsocietyHeaderStyle(child)
+            }
+        }
+    }
+
     private fun setupTheme() {
         binding.btnTheme.setOnClickListener {
             val names = mutableListOf(
                 getString(R.string.theme_dark),
                 getString(R.string.theme_light),
                 getString(R.string.theme_oled),
-                getString(R.string.theme_ocean)
+                getString(R.string.theme_ocean),
+                getString(R.string.theme_fsociety)
             )
             val modes = THEME_MODES.toMutableList()
             // Dynamic colors only on Android 12+

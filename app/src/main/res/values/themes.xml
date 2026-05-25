@@ -86,6 +86,41 @@
         <item name="capsuleProgressColor">?attr/colorPrimary</item>
     </style>
 
+    <!-- fsociety - Mr. Robot phosphor terminal aesthetic. Pure-black AMOLED
+         friendly background, classic Apple-IIe / VT100 green text, red alert
+         accent for destructive bits. Goes with monospace typography in
+         layouts (default Material widgets are fine, only the typography
+         feels off-tone). -->
+    <style name="Theme.NetGuard.Fsociety" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">@color/fsoc_green</item>
+        <item name="colorPrimaryContainer">@color/fsoc_green_dim</item>
+        <item name="colorOnPrimary">@color/fsoc_bg</item>
+        <item name="colorOnPrimaryContainer">@color/fsoc_bg</item>
+        <item name="colorSecondary">@color/fsoc_red</item>
+        <item name="colorSecondaryContainer">#FF330008</item>
+        <item name="colorOnSecondary">#FFFFFFFF</item>
+        <item name="colorTertiary">@color/fsoc_amber</item>
+        <item name="colorSurface">@color/fsoc_surface</item>
+        <item name="colorSurfaceVariant">@color/fsoc_surface_variant</item>
+        <item name="colorOnSurface">@color/fsoc_text</item>
+        <item name="colorOnSurfaceVariant">@color/fsoc_text_secondary</item>
+        <item name="colorOutline">@color/fsoc_outline</item>
+        <item name="colorOutlineVariant">#FF0F2412</item>
+        <item name="android:colorBackground">@color/fsoc_bg</item>
+        <item name="android:windowBackground">@color/fsoc_bg</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@color/fsoc_bg</item>
+        <item name="android:textColor">@color/fsoc_text</item>
+        <item name="android:textColorPrimary">@color/fsoc_text</item>
+        <item name="android:textColorSecondary">@color/fsoc_text_secondary</item>
+        <item name="android:typeface">monospace</item>
+        <item name="android:fontFamily">monospace</item>
+        <item name="cardNormalBackground">@color/fsoc_surface</item>
+        <item name="cardSelectedBackground">#FF112617</item>
+        <item name="capsuleTrackColor">#33FFFFFF</item>
+        <item name="capsuleProgressColor">@color/fsoc_green</item>
+    </style>
+
     <!-- Ocean - deep blue & cyan -->
     <style name="Theme.NetGuard.Ocean" parent="Theme.Material3.Dark.NoActionBar">
         <item name="colorPrimary">#00BCD4</item>

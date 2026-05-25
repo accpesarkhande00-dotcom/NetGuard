@@ -55,12 +55,23 @@ object ProfileParser {
     }
 
     fun parseSubscription(rawContent: String): ParseResult {
-        // Subscription is base64-encoded list of URIs
-        val decoded = try {
-            String(Base64.decode(rawContent.trim(), Base64.DEFAULT), Charsets.UTF_8)
-        } catch (_: Exception) {
-            // Not base64 — try as plain text
+        // If the body is already a list of URIs (vless://, telemost://, ...),
+        // skip the base64 step. Some sub providers and direct paste workflows
+        // hand us plaintext lines that happen to look "base64-ish" enough to
+        // not throw, yielding garbage that doesn't match any URI prefix.
+        val trimmed = rawContent.trim()
+        val looksLikeUri = trimmed.startsWith("vless://") || trimmed.startsWith("vmess://") ||
+            trimmed.startsWith("trojan://") || trimmed.startsWith("ss://") ||
+            trimmed.startsWith("hysteria2://") || trimmed.startsWith("hy2://") ||
+            trimmed.startsWith("telemost://")
+        val decoded = if (looksLikeUri) {
             rawContent
+        } else {
+            try {
+                String(Base64.decode(trimmed, Base64.DEFAULT), Charsets.UTF_8)
+            } catch (_: Exception) {
+                rawContent
+            }
         }
         return parseMultiline(decoded)
     }
@@ -76,8 +87,42 @@ object ProfileParser {
             trimmed.startsWith("trojan://") -> parseTrojan(trimmed)
             trimmed.startsWith("ss://") -> parseShadowsocks(trimmed)
             trimmed.startsWith("hysteria2://") || trimmed.startsWith("hy2://") -> parseHysteria2(trimmed)
+            trimmed.startsWith("telemost://") -> parseTelemost(trimmed)
             else -> null
         }
+    }
+
+    private fun parseTelemost(uri: String): ServerProfile {
+        val withoutScheme = uri.removePrefix("telemost://")
+        val (encoded, fragment) = splitFragment(withoutScheme)
+        val name = urlDecode(fragment)
+        val decoded = try {
+            String(
+                Base64.decode(encoded, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING),
+                Charsets.UTF_8
+            )
+        } catch (e: Exception) {
+            throw IllegalArgumentException("Invalid base64 in telemost URI: ${e.message}")
+        }
+        // Multi-link profile: newline-separated join URLs. The Telemost relay
+        // manager spawns one librelay.so per link and round-robins TCP
+        // connections across them via a local SOCKS5 LB. Single-link profiles
+        // (no newline) are a degenerate N=1 case using the same code path.
+        val links = decoded.split('\n', '\r').map { it.trim() }.filter { it.isNotEmpty() }
+        if (links.isEmpty()) {
+            throw IllegalArgumentException("Telemost URI has no join links after decoding")
+        }
+        for (l in links) {
+            if (!l.startsWith("https://telemost.yandex.ru/j/")) {
+                throw IllegalArgumentException("Telemost link must be https://telemost.yandex.ru/j/<id>, got: ${l.take(60)}")
+            }
+        }
+        return ServerProfile(
+            name = safeName(name, if (links.size > 1) "Telemost-x${links.size}" else "Telemost"),
+            protocol = Protocol.TELEMOST,
+            address = links.joinToString("\n"),
+            port = 443
+        )
     }
 
     // ======================== VLESS ========================

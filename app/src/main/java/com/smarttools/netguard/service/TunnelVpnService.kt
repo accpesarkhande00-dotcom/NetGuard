@@ -162,6 +162,10 @@ class TunnelVpnService : VpnService() {
     private var xrayProcess: Process? = null
     @Volatile
     private var tun2socksProcess: Process? = null
+    // Owned process is inside the manager; this reference lets us stop it
+    // from stopTunnelProcesses() and lets the watchdog peek at liveness.
+    @Volatile
+    private var telemostRelay: TelemostRelayManager? = null
     @Volatile
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     // Secondary callback that fires for ANY non-VPN INTERNET network (not just
@@ -212,6 +216,8 @@ class TunnelVpnService : VpnService() {
     private var xrayWatchdogJob: Job? = null
     @Volatile
     private var tun2socksWatchdogJob: Job? = null
+    @Volatile
+    private var telemostWatchdogJob: Job? = null
     // Reference to the in-progress startTunnel coroutine so a network event
     // arriving mid-connect can cancel it and restart with the new network.
     // Without this, a doomed dial through a dying network keeps running until
@@ -426,6 +432,7 @@ class TunnelVpnService : VpnService() {
         // detect the intentional kill, see Connecting state, and call stopTunnel()
         xrayWatchdogJob?.cancel()
         tun2socksWatchdogJob?.cancel()
+        telemostWatchdogJob?.cancel()
         // Clean up any existing connection before starting new one
         unregisterNetworkCallback()
         stopTunnelProcesses()
@@ -495,40 +502,74 @@ class TunnelVpnService : VpnService() {
                     }
                     synchronized(fdLock) { vpnFd = fd }
 
-                    // 2. Copy geodata files to xray's working directory
-                    copyGeoFiles()
+                    // 2-5. Bring up the proxy that exposes a local SOCKS5 for tun2socks.
+                    //      For Telemost-bypass profiles we spawn librelay.so directly
+                    //      (the Yandex Telemost WebRTC tunnel); everything else goes
+                    //      through the xray-core pipeline as before.
+                    val socksPort: Int
+                    val socksUser: String
+                    val socksPass: String
 
-                    // 3. Generate xray config with authenticated SOCKS5 on random port
-                    val config = XrayConfigGenerator.generate(
-                        profile = profile,
-                        settings = settings,
-                        useSocksInbound = true
-                    )
+                    if (profile.protocol == com.smarttools.netguard.model.Protocol.TELEMOST) {
+                        // Allocate a SOCKS port via CredentialManager (sufficient port pool
+                        // tracking) but discard user/pass — Telemost path is auth-free, see
+                        // startTun2socksProcess() comment and TelemostRelayManager.
+                        val (_, _, port) = com.smarttools.netguard.core.CredentialManager.generate()
+                        socksPort = port; socksUser = ""; socksPass = ""
 
-                    // 4. Write xray config atomically (temp + rename) to prevent corruption
-                    val configFile = File(filesDir, "config.json")
-                    val tempFile = File(filesDir, "config.json.tmp")
-                    tempFile.writeText(config.json)
-                    tempFile.renameTo(configFile)
-                    Log.i(TAG, "Config written, SOCKS port=${config.socksPort}")
+                        val relay = TelemostRelayManager(
+                            nativeLibDir = applicationInfo.nativeLibraryDir,
+                            onLog = { line -> LogBuffer.add(LogBuffer.LogLevel.INFO, line) },
+                            onStatus = { /* status surfaced via log; UI listens to ConnectionState */ },
+                            onTunnelLost = {
+                                // The relay process is still up but Yandex SFU dropped us.
+                                // Surface as a warning; if it stays lost for >15s the
+                                // relay typically exits and our watchdog will tear down.
+                                LogBuffer.add(LogBuffer.LogLevel.WARN, "Telemost tunnel lost — relay will attempt internal recovery")
+                            }
+                        )
+                        telemostRelay = relay
+                        val ok = relay.start(profile, port, socksUser, socksPass, serviceScope!!, timeoutMs = 30_000)
+                        if (!ok) throw IllegalStateException("Telemost relay failed to reach TUNNEL_CONNECTED")
+                        waitForPort(port, timeoutMs = 5000)
+                        Log.i(TAG, "Telemost SOCKS5 is listening on port $port")
+                    } else {
+                        // 2. Copy geodata files to xray's working directory
+                        copyGeoFiles()
 
-                    // 5. Start xray-core process, ensure config deleted even on failure
-                    try {
-                        startXrayProcess(configFile)
+                        // 3. Generate xray config with authenticated SOCKS5 on random port
+                        val config = XrayConfigGenerator.generate(
+                            profile = profile,
+                            settings = settings,
+                            useSocksInbound = true
+                        )
 
-                        // 5a. Wait for xray to bind the SOCKS port
-                        waitForPort(config.socksPort ?: throw IllegalStateException("SOCKS port not generated"), timeoutMs = 5000)
-                        Log.i(TAG, "Xray is listening on port ${config.socksPort}")
-                    } finally {
-                        // 5b. Delete config from disk — xray already read it into memory
-                        configFile.delete()
-                        Log.i(TAG, "Config file deleted from disk")
+                        // 4. Write xray config atomically (temp + rename) to prevent corruption
+                        val configFile = File(filesDir, "config.json")
+                        val tempFile = File(filesDir, "config.json.tmp")
+                        tempFile.writeText(config.json)
+                        tempFile.renameTo(configFile)
+                        Log.i(TAG, "Config written, SOCKS port=${config.socksPort}")
+
+                        // 5. Start xray-core process, ensure config deleted even on failure
+                        try {
+                            startXrayProcess(configFile)
+
+                            // 5a. Wait for xray to bind the SOCKS port
+                            waitForPort(config.socksPort ?: throw IllegalStateException("SOCKS port not generated"), timeoutMs = 5000)
+                            Log.i(TAG, "Xray is listening on port ${config.socksPort}")
+                        } finally {
+                            // 5b. Delete config from disk — xray already read it into memory
+                            configFile.delete()
+                            Log.i(TAG, "Config file deleted from disk")
+                        }
+
+                        socksPort = config.socksPort ?: throw IllegalStateException("SOCKS port not generated")
+                        socksUser = config.socksUser ?: throw IllegalStateException("SOCKS user not generated")
+                        socksPass = config.socksPass ?: throw IllegalStateException("SOCKS pass not generated")
                     }
 
                     // 6. Start tun2socks: TUN fd → authenticated SOCKS5
-                    val socksPort = config.socksPort ?: throw IllegalStateException("SOCKS port not generated")
-                    val socksUser = config.socksUser ?: throw IllegalStateException("SOCKS user not generated")
-                    val socksPass = config.socksPass ?: throw IllegalStateException("SOCKS pass not generated")
                     startTun2socksProcess(fd, socksPort, socksUser, socksPass)
 
                     // 7a. Credentials kept alive for speed test/service tester
@@ -723,23 +764,34 @@ class TunnelVpnService : VpnService() {
         // SELinux + hidepid hide this from other apps on stock Android, but same-uid
         // processes and root can read it. Migrate to stdin pipe or fd-based creds
         // once the tun2socks fork supports it (see README security-hardening section).
-        val pb = ProcessBuilder(
+        // Empty user/pass = no SOCKS5 auth. Used by the Telemost path because the
+        // local round-robin LB is byte-transparent and SOCKS5 auth fragments
+        // across upstreams unreliably; the loopback binding alone enforces
+        // isolation there.
+        val args = mutableListOf(
             tun2socksBin.absolutePath,
             "--netif-ipaddr", "10.10.10.2",
             "--netif-netmask", "255.255.255.252",
             "--socks-server-addr", "127.0.0.1:$port",
-            "--username", user,
-            "--password", pass,
             "--tunmtu", tunMtu.toString(),
             "--sock-path", sockPath,
             "--enable-udprelay",
             "--loglevel", "notice"
         )
+        val authed = user.isNotEmpty()
+        if (authed) {
+            // FIXME(security): --username/--password are visible in /proc/<pid>/cmdline.
+            // SELinux + hidepid hide this from other apps on stock Android, but same-uid
+            // processes and root can read it. Migrate to stdin pipe or fd-based creds
+            // once the tun2socks fork supports it.
+            args.addAll(listOf("--username", user, "--password", pass))
+        }
+        val pb = ProcessBuilder(args)
         pb.directory(filesDir)
         pb.redirectErrorStream(true)
 
         tun2socksProcess = pb.start()
-        Log.i(TAG, "tun2socks started, sock=$sockPath, socks=127.0.0.1:$port, auth=yes")
+        Log.i(TAG, "tun2socks started, sock=$sockPath, socks=127.0.0.1:$port, auth=$authed")
 
         // Log output in background. Same redaction story as xray.
         serviceScope?.launch(Dispatchers.IO) {
@@ -806,9 +858,27 @@ class TunnelVpnService : VpnService() {
     private fun launchProcessWatchdog() {
         xrayWatchdogJob?.cancel()
         tun2socksWatchdogJob?.cancel()
+        telemostWatchdogJob?.cancel()
         // We're about to take responsibility for the new processes — clear the
         // intentional-kill shield so a real crash IS observed.
         intentionalProcessKill = false
+
+        telemostWatchdogJob = serviceScope?.launch(Dispatchers.IO) {
+            val proc = telemostRelay?.process() ?: return@launch
+            try {
+                val exitCode = proc.waitFor()
+                if (intentionalProcessKill || isReconnecting) return@launch
+                val state = _connectionState.value
+                if (isActive && (state is ConnectionState.Connected || state is ConnectionState.Connecting)) {
+                    Log.e(TAG, "Telemost relay died (exit $exitCode); tearing down tunnel")
+                    LogBuffer.add(LogBuffer.LogLevel.ERROR, "Telemost relay exited ($exitCode)")
+                    withContext(Dispatchers.Main) {
+                        _connectionState.value = ConnectionState.Error("Telemost relay exited ($exitCode)")
+                        stopTunnel()
+                    }
+                }
+            } catch (_: Exception) {}
+        }
 
         xrayWatchdogJob = serviceScope?.launch(Dispatchers.IO) {
             try {
@@ -868,6 +938,7 @@ class TunnelVpnService : VpnService() {
                 quarantineMode = true
                 xrayWatchdogJob?.cancel()
                 tun2socksWatchdogJob?.cancel()
+                telemostWatchdogJob?.cancel()
                 trafficMonitor?.stop(); trafficMonitor = null
                 tun2socksProcess?.let { p -> try { p.destroy() } catch (_: Exception) {}; try { p.destroyForcibly() } catch (_: Exception) {} }
                 tun2socksProcess = null
@@ -897,6 +968,7 @@ class TunnelVpnService : VpnService() {
 
                 // Kill tun2socks too — it'll need new SOCKS creds.
                 tun2socksWatchdogJob?.cancel()
+                telemostWatchdogJob?.cancel()
                 tun2socksProcess?.let { p -> try { p.destroy() } catch (_: Exception) {} ; try { p.destroyForcibly() } catch (_: Exception) {} }
                 tun2socksProcess = null
                 CredentialManager.clear()
@@ -1599,6 +1671,7 @@ class TunnelVpnService : VpnService() {
             // returned (or are about to within microseconds).
             xrayWatchdogJob?.cancelAndJoin()
             tun2socksWatchdogJob?.cancelAndJoin()
+            telemostWatchdogJob?.cancel()
             xrayWatchdogJob = null
             tun2socksWatchdogJob = null
 
@@ -1729,6 +1802,8 @@ class TunnelVpnService : VpnService() {
             try { p.destroyForcibly() } catch (_: Exception) {}
         }
         xrayProcess = null
+        telemostRelay?.stop()
+        telemostRelay = null
         CredentialManager.clear()
         synchronized(fdLock) {
             vpnFd?.close()
@@ -1746,6 +1821,7 @@ class TunnelVpnService : VpnService() {
         // Cancel any prior watchdogs
         xrayWatchdogJob?.cancel()
         tun2socksWatchdogJob?.cancel()
+        telemostWatchdogJob?.cancel()
         unregisterNetworkCallback()
         // Don't kill an existing TUN if we already have one — only kill processes.
         trafficMonitor?.stop(); trafficMonitor = null
@@ -1753,6 +1829,8 @@ class TunnelVpnService : VpnService() {
         tun2socksProcess = null
         xrayProcess?.let { p -> try { p.destroy() } catch (_: Exception) {}; try { p.destroyForcibly() } catch (_: Exception) {} }
         xrayProcess = null
+        telemostRelay?.stop()
+        telemostRelay = null
         CredentialManager.clear()
 
         serviceScope?.launch {
@@ -1896,6 +1974,7 @@ class TunnelVpnService : VpnService() {
                 _connectionState.value = ConnectionState.Disconnected
                 xrayWatchdogJob?.cancel()
                 tun2socksWatchdogJob?.cancel()
+                telemostWatchdogJob?.cancel()
                 trafficMonitor?.stop(); trafficMonitor = null
                 tun2socksProcess?.destroyForcibly(); tun2socksProcess = null
                 xrayProcess?.destroyForcibly(); xrayProcess = null
@@ -1922,6 +2001,7 @@ class TunnelVpnService : VpnService() {
         unregisterNetworkCallback()
         xrayWatchdogJob?.cancel()
         tun2socksWatchdogJob?.cancel()
+        telemostWatchdogJob?.cancel()
         trafficMonitor?.stop(); trafficMonitor = null
         tun2socksProcess?.let { p -> try { p.destroy() } catch (_: Exception) {}; try { p.destroyForcibly() } catch (_: Exception) {} }
         tun2socksProcess = null

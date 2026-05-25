@@ -73,6 +73,7 @@ class OnboardingActivity : AppCompatActivity() {
             ThemeMode.LIGHT -> R.style.Theme_NetGuard_Light
             ThemeMode.OLED -> R.style.Theme_NetGuard_OLED
             ThemeMode.OCEAN -> R.style.Theme_NetGuard_Ocean
+            ThemeMode.FSOCIETY -> R.style.Theme_NetGuard_Fsociety
             ThemeMode.DYNAMIC -> R.style.Theme_NetGuard_Dynamic
         })
         if (theme == ThemeMode.DYNAMIC) DynamicColors.applyToActivityIfAvailable(this)

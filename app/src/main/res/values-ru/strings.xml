@@ -280,4 +280,16 @@
     <string name="bypass_ips_hint">IP / CIDR (по одному на строку)</string>
     <string name="bypass_too_broad_warning">Паттерн \"%1$s\" слишком широкий - почти весь трафик пойдёт мимо VPN</string>
     <string name="bypass_too_broad_toast">Некоторые правила обхода слишком широкие и фактически отключают VPN</string>
+    <string name="theme_fsociety">fsociety</string>
+    <string name="connect_first">Сначала подключите VPN</string>
+    <string name="created_by">Сделано KOKOS</string>
+    <string name="gallery">Галерея</string>
+    <string name="github_url">https://github.com/KOKosaaaa</string>
+    <string name="no_qr_found">QR-код на изображении не найден</string>
+    <string name="qr_no_valid_data">QR-код не содержит данных VPN</string>
+    <string name="service_score">Балл: %1$d/%2$d</string>
+    <string name="service_test_results">Доступность сервисов</string>
+    <string name="sort_by_compat">По совместимости</string>
+    <string name="subscription_added_qr">Подписка добавлена из QR</string>
+    <string name="test_services">Проверить сервисы</string>
 </resources>

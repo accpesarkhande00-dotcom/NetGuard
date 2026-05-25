@@ -80,7 +80,16 @@ data class ServerProfile(
             Protocol.TROJAN -> buildTrojanUri()
             Protocol.SHADOWSOCKS -> buildShadowsocksUri()
             Protocol.HYSTERIA2 -> buildHysteria2Uri()
+            Protocol.TELEMOST -> buildTelemostUri()
         }
+    }
+
+    private fun buildTelemostUri(): String {
+        val encoded = android.util.Base64.encodeToString(
+            address.toByteArray(Charsets.UTF_8),
+            android.util.Base64.NO_WRAP or android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING
+        )
+        return "telemost://$encoded#${enc(name)}"
     }
 
     private fun enc(s: String) = java.net.URLEncoder.encode(s, "UTF-8")
@@ -171,7 +180,8 @@ enum class Protocol(val value: String) {
     VMESS("vmess"),
     TROJAN("trojan"),
     SHADOWSOCKS("shadowsocks"),
-    HYSTERIA2("hysteria2");
+    HYSTERIA2("hysteria2"),
+    TELEMOST("telemost");
 
     companion object {
         fun fromString(s: String): Protocol = entries.firstOrNull {

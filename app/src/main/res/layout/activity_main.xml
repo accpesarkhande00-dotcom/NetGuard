@@ -26,4 +26,28 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
 
+    <!-- fsociety boot-sequence overlay. Hidden by default; MainActivity
+         makes it VISIBLE only on first launch of the activity (savedInstanceState=null)
+         when the active theme is FSOCIETY. After ~1.8s it fades out and is
+         set back to GONE. Constrained to fill the whole window. -->
+    <TextView
+        android:id="@+id/boot_overlay"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:background="#FF000000"
+        android:fontFamily="monospace"
+        android:textColor="#FF00FF41"
+        android:textSize="11sp"
+        android:padding="16dp"
+        android:gravity="top|start"
+        android:visibility="gone"
+        android:focusable="false"
+        android:clickable="false"
+        android:elevation="32dp"
+        android:translationZ="32dp"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
 </androidx.constraintlayout.widget.ConstraintLayout>

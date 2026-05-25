@@ -15,6 +15,21 @@
         android:paddingTop="8dp"
         android:paddingBottom="4dp">
 
+        <!-- fsociety header: "hello, friend." Mr.Robot pilot opener. Hidden
+             on non-fsociety themes; surfaced by HomeFragment at runtime. -->
+        <TextView
+            android:id="@+id/tv_fsoc_header"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="hello, friend."
+            android:textSize="12sp"
+            android:textStyle="italic"
+            android:fontFamily="monospace"
+            android:textColor="@color/fsoc_text_secondary"
+            android:visibility="gone"
+            android:layout_marginTop="2dp"
+            android:layout_marginBottom="2dp" />
+
         <TextView
             android:id="@+id/tv_status"
             android:layout_width="wrap_content"
@@ -23,6 +38,18 @@
             android:textSize="18sp"
             android:textStyle="bold"
             android:layout_marginBottom="4dp" />
+
+        <!-- fsociety subtitle: rotating ascii prompt; theme-only -->
+        <TextView
+            android:id="@+id/tv_fsoc_prompt"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="root@fsociety:~$ awaiting target"
+            android:textSize="11sp"
+            android:fontFamily="monospace"
+            android:textColor="@color/fsoc_text_secondary"
+            android:visibility="gone"
+            android:layout_marginBottom="2dp" />
 
         <com.smarttools.netguard.widget.ConnectionMapView
             android:id="@+id/connection_map"
@@ -126,6 +153,25 @@
                 android:visibility="gone"
                 android:layout_marginTop="4dp" />
         </LinearLayout>
+
+        <!-- fsociety easter-egg quote slot. Hidden by default; surfaced
+             with fade-in for ~5s when the user taps the profile name 5 times
+             on fsociety theme. Sits above the weighted Space so the stats
+             stay anchored to the bottom (Space absorbs the height change). -->
+        <TextView
+            android:id="@+id/tv_fsoc_quote"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="32dp"
+            android:layout_marginHorizontal="16dp"
+            android:padding="14dp"
+            android:gravity="center"
+            android:fontFamily="monospace"
+            android:textSize="13sp"
+            android:textColor="@color/fsoc_text"
+            android:background="#1F00FF41"
+            android:visibility="gone"
+            android:importantForAccessibility="no" />
 
         <!-- Single weighted space — pushes stats to bottom, nothing above shifts -->
         <Space
