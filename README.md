@@ -142,6 +142,63 @@ If we missed your project here, please open an issue - credit is the one thing w
 
 ## Release notes
 
+### v1.3.1 (2026-05-27) — Telemost: phantom-lock fix, joiner-side slot patch, idle CPU
+
+Iteration on the Telemost protocol shipped in v1.3.0. Three fixes in
+`librelay.so`, all behind the same `telemost://` profile path — no UI
+changes, no new settings, just a recompile of the embedded Go binary.
+
+**Phantom-tolerant peer lock (server side, deployed in the creator on
+the conference-host VM).** When a Yandex Telemost room contains more
+than one peer (the creator + any leftover phantom participants from
+prior sessions), the obfuscator's `peerEpoch` used to ping-pong between
+peers on every other frame, triggering `PeerRestart` → `OnPeerRestart`
+→ bridge `closeAll`, which kills every active TCP/UDP tunnel. The
+creator now locks to the first peer that delivers real payload (not
+keepalive) and silently drops frames from other epochs. 30s idle
+release if the locked peer goes quiet. Frames from phantoms decode to
+nothing and never reach the relay bridge.
+
+**Joiner-side slotsConfig handler rewrite (client side, in
+`librelay.so`).** Yandex's `slotsConfig` is a UI-layout signal — it
+shuffles which video tile shows whose track, and per-slot `UNBOUND`
+events fire constantly during layout reshuffles, especially when the
+creator publishes multiple video tracks. The previous handler treated
+`UNBOUND` as "peer gone" and called `forceReconnect`, which caused a
+join → leave storm at ~1 cycle per second whenever the creator side
+had `WLB_EXTRA_VIDEO_TRACKS>0`. Now `slotsConfig` only updates
+diagnostic bound-peer state; the real peer-gone signal comes from
+`removeDescription`, and tunnel lifecycle is governed by WebRTC PC
+state. The same patch was mirrored on the creator side, since the
+creator's own `kicking self` path fired off the same bug.
+
+**Idle dual-ticker in `VP8DataTunnel.writerLoop`.** The writer loop ran
+a fixed ~1.4ms ticker (720 Hz) regardless of whether there was
+anything to send. With multi-x6 mode this meant six librelay
+instances each waking up 720 times a second on the phone. The loop
+now uses two tickers — a fast one at sample interval, and a slow
+500ms one for keepalive-only periods. After 240 consecutive idle
+ticks the writer switches to the slow ticker; the first non-keepalive
+chunk flips it back. On real traffic the rate is identical to before;
+during idle the CPU/wakeup load drops by about two orders of
+magnitude.
+
+**Net effect on download throughput**: speedtest on the multi-x6
+profile improved from ~7 Mbps to **9.46 Mbps down / 4.17 Mbps up**
+(via Aeza Stockholm). Latency stays high (~1 s ping is normal for any
+WebRTC-tunnelled SOCKS path).
+
+**Multi-publisher path was explored and abandoned.** We tried
+publishing 3 simulcast-like video tracks per creator with
+sticky-by-`connID` routing in the tunnel, hoping to break past
+Yandex's per-stream ~1.25 Mbps cap. SDP negotiates fine (answer grew
+from 1431 to 2755 bytes) and packets do flow, but Yandex SFU
+aggressively rate-limits multi-stream output from a single publisher,
+so total throughput dropped roughly tenfold compared to single-track.
+Single-track multi-x6 stays the best path on Yandex Telemost as the
+SFU; the multi-track scaffolding remains in the code for future use
+on a different SFU.
+
 ### v1.3.0 (2026-05-26) — fsociety theme + Telemost multi-channel tunnel
 
 **fsociety theme.** Mr. Robot inspired phosphor-terminal redesign (Settings →
