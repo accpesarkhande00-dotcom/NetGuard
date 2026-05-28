@@ -38,6 +38,21 @@ class TelemostRelayManager(
         private const val TAG = "TelemostRelay"
         private const val SIGNALING_PORT_BASE = 9001
         private const val INTERNAL_SOCKS_BASE = 38000
+
+        // Pool of plausible Russian first names. Picked at random per join so the
+        // device appears in Telemost participant lists as a normal user, not as
+        // "NetGuard" (which would leak the project name and the bypass technique
+        // to anyone observing the room).
+        private val BOT_NAMES = arrayOf(
+            "Гоша", "Миша", "Дмитрий", "Александр", "Иван", "Сергей",
+            "Андрей", "Николай", "Алексей", "Виктор", "Олег", "Павел",
+            "Юрий", "Игорь", "Константин", "Артём", "Денис", "Кирилл",
+            "Максим", "Антон", "Владимир", "Роман", "Евгений", "Тимур",
+            "Богдан", "Глеб", "Семён", "Лев", "Степан", "Фёдор"
+        )
+
+        private fun pickDisplayName(): String =
+            BOT_NAMES[java.util.Random().nextInt(BOT_NAMES.size)]
     }
 
     private val instances = mutableListOf<RelayInstance>()
@@ -231,9 +246,11 @@ class TelemostRelayManager(
         }
 
         private fun sendJoin() {
+            val name = pickDisplayName()
+            Log.d(TAG, "#${idx + 1} joining as \"$name\"")
             val json = JSONObject().apply {
                 put("joinLink", joinLink)
-                put("displayName", "NetGuard")
+                put("displayName", name)
                 put("tunnelMode", "video")
             }.toString()
             writeStdin("JOIN:$json")
